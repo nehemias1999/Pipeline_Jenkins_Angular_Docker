@@ -1,45 +1,45 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Lista de repositorios/locales a procesar
+# List of repositories/local images to process
 repos=(
   "angular_application"
 )
 
-echo "Eliminando imagenes locales, dejando solo las 3 mas recientes..."
+echo "Removing local images, keeping only the 3 most recent ones..."
 for repo in "${repos[@]}"; do
   echo
-  echo "Procesando repo: $repo"
+  echo "Processing repository: $repo"
 
-  # 1) Obtener lista de los nombres de las imagenes y sub tags
+  # 1) Get the list of image names and tags
   mapfile -t images_names < <(
     docker images "$repo" --format "{{.Repository}}:{{.Tag}}" \
       | sort -r
   )
 
   total=${#images_names[@]}
-  echo "Total de imagenes encontradas: $total"
+  echo "Total images found: $total"
 
-  # 2) Si hay 3 o menos, no eliminar nada
+  # 2) If there are 3 or fewer images, do not remove anything
   if (( total <= 3 )); then
-    echo "Hay $total imagenes (<=3); no se elimina nada."
+    echo "There are $total images (<=3); nothing will be removed."
     continue
   fi
 
-  # 3) Construir lista de image_names a eliminar (desde el 4° en adelante)
+  # 3) Build the list of image names to delete (from the 4th onward)
   images_to_delete=( "${images_names[@]:3}" )
-  echo "Eliminando ${#images_to_delete[@]} imagenes antiguas de $repo..."
+  echo "Removing ${#images_to_delete[@]} old images from $repo..."
 
-  echo "Total de imagenes: ${images_names[@]}"
-  echo "Total de imagenes a borrar: ${images_to_delete[@]}"
+  echo "All images: ${images_names[@]}"
+  echo "Images to be deleted: ${images_to_delete[@]}"
 
-  # 4) Borrar imágenes antiguas una por una
+  # 4) Remove old images one by one
   for image_name in "${images_to_delete[@]}"; do
-    echo "Eliminando imagen $image_name..."
-    docker rmi -f "$image_name" || echo "No se pudo eliminar la imagen $image_name."
+    echo "Removing image $image_name..."
+    docker rmi -f "$image_name" || echo "Failed to remove image $image_name."
   done
 
 done
 
 echo
-echo "Proceso completado: solo se conservaron las 3 imagenes mas recientes de cada repo."
+echo "Process completed: only the 3 most recent images of each repository were kept."
