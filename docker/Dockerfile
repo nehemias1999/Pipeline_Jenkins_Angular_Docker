@@ -1,5 +1,7 @@
 FROM node:22.18-alpine AS build
 
+LABEL maintainer="nehemias salazar <nehemiassala@gmail.com>"
+
 # Set the working directory
 WORKDIR /app
 
