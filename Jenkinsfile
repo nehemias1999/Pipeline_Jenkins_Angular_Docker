@@ -30,6 +30,10 @@ pipeline {
                                       '%SSHHost% ' +
                                       '%RemoteRepositoryPath%'
 
+        /* Bloque versionado (REQ versionado-trazabilidad): tag SemVer + SHA corto para trazabilidad. */
+        GIT_SHORT_SHA = "${env.GIT_COMMIT?.take(7) ?: 'dev'}"
+        DOCKER_IMAGE_TAG = "1.${BUILD_NUMBER}-${GIT_SHORT_SHA}"
+
         /* Stage 'Create and Deploy Docker image' */
 
         DockerImageTag = "1.${BUILD_ID}"
@@ -142,6 +146,27 @@ pipeline {
                 }
 
                 echo 'End Set content Docker image'
+
+            }
+
+        }
+
+        stage('Versionado y trazabilidad') {
+
+            steps {
+
+                echo 'Start Versionado y trazabilidad'
+
+                script {
+
+                    // Bloque versionado (REQ versionado-trazabilidad): genera build-info.json y lo archiva para auditoria.
+                    def versionTag = env.DOCKER_IMAGE_TAG ?: "1.${env.BUILD_NUMBER}-${env.GIT_SHORT_SHA}"
+                    writeFile file: 'build-info.json', text: "{\"commit\": \"${env.GIT_COMMIT}\", \"branch\": \"${env.BRANCH_NAME}\", \"build_tag\": \"${versionTag}\", \"image\": \"${env.DockerImageName}:${versionTag}\", \"timestamp\": \"${new Date().format(\"yyyy-MM-dd'T'HH:mm:ss'Z'\", TimeZone.getTimeZone('UTC'))}\"}"
+                    archiveArtifacts artifacts: 'build-info.json, docker/ANGULAR_APPLICATION.var', fingerprint: true
+
+                }
+
+                echo 'End Versionado y trazabilidad'
 
             }
 
