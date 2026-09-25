@@ -161,6 +161,14 @@ pipeline {
 
                     // Bloque versionado (REQ versionado-trazabilidad): genera build-info.json y lo archiva para auditoria.
                     def versionTag = env.DOCKER_IMAGE_TAG ?: "1.${env.BUILD_NUMBER}-${env.GIT_SHORT_SHA}"
+                    // Exporta el tag al .var por clave ^DOCKER_IMAGE_TAG= (nunca por numero de linea).
+                    def varText = readFile file: 'docker/ANGULAR_APPLICATION.var'
+                    if (varText =~ /(?m)^DOCKER_IMAGE_TAG=/) {
+                        varText = varText.replaceAll(/(?m)^DOCKER_IMAGE_TAG=.*/, "DOCKER_IMAGE_TAG=${versionTag}")
+                    } else {
+                        varText = varText + "\nDOCKER_IMAGE_TAG=${versionTag}\n"
+                    }
+                    writeFile file: 'docker/ANGULAR_APPLICATION.var', text: varText
                     writeFile file: 'build-info.json', text: "{\"commit\": \"${env.GIT_COMMIT}\", \"branch\": \"${env.BRANCH_NAME}\", \"build_tag\": \"${versionTag}\", \"image\": \"${env.DockerImageName}:${versionTag}\", \"timestamp\": \"${new Date().format(\"yyyy-MM-dd'T'HH:mm:ss'Z'\", TimeZone.getTimeZone('UTC'))}\"}"
                     archiveArtifacts artifacts: 'build-info.json, docker/ANGULAR_APPLICATION.var', fingerprint: true
 
@@ -198,6 +206,25 @@ pipeline {
     }
 
     post {
+
+        // Bloque versionado (REQ versionado-trazabilidad): archivado resiliente en exito o fallo.
+        always {
+
+            script {
+
+                try {
+                    if (!fileExists('build-info.json')) {
+                        def fallbackTag = env.DOCKER_IMAGE_TAG ?: "1.${env.BUILD_NUMBER}-${env.GIT_SHORT_SHA}"
+                        writeFile file: 'build-info.json', text: "{\"commit\": \"${env.GIT_COMMIT}\", \"branch\": \"${env.BRANCH_NAME}\", \"build_tag\": \"${fallbackTag}\", \"image\": \"${env.DockerImageName}:${fallbackTag}\", \"timestamp\": \"${new Date().format(\"yyyy-MM-dd'T'HH:mm:ss'Z'\", TimeZone.getTimeZone('UTC'))}\"}"
+                    }
+                    archiveArtifacts artifacts: 'build-info.json, docker/ANGULAR_APPLICATION.var', allowEmptyArchive: true, fingerprint: true
+                } catch (err) {
+                    echo "Versionado: no se pudo archivar build-info (${err})"
+                }
+
+            }
+
+        }
 
         success {
 
