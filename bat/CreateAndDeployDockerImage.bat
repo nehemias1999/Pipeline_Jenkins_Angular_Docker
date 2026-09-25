@@ -1,14 +1,23 @@
 @echo off
+REM ==============================================================================
+REM Description: Actualiza el tag DOCKER_IMAGE_TAG por clave (awk, nunca por
+REM   posicion de linea) en el .var remoto, detiene los contenedores y levanta
+REM   la nueva version con docker compose, con SSH endurecido.
+REM Author: Pipeline_Jenkins_Angular_Docker maintainers
+REM Usage: CreateAndDeployDockerImage.bat ^<SSHPrivateKeyPath^> ^<SSHUser^> ^<SSHHost^> ^<RemoteRepositoryPath^> ^<DockerImageTag^> ^<EnvFile^> ^<DockerComposeFile^>
+REM Env Vars: ninguna (todo por argumentos).
+REM Dependencies: ssh (OpenSSH); en remoto: awk, grep, docker compose
+REM Exit codes: 0 ok; 2 uso/argumentos invalidos.
+REM ==============================================================================
+setlocal EnableExtensions
 
-REM ===============================================
-REM Script: CreateAndDeployDockerImage.bat
-REM Description: Update the version tag, stop existing containers,
-REM and start the new version using docker-compose.
-REM ===============================================
-
-REM ==============================
-REM Parameters
-REM ==============================
+if "%~1"=="" echo Usage: CreateAndDeployDockerImage.bat ^<SSHPrivateKeyPath^> ^<SSHUser^> ^<SSHHost^> ^<RemoteRepositoryPath^> ^<DockerImageTag^> ^<EnvFile^> ^<DockerComposeFile^> 1>&2 & exit /b 2
+if "%~2"=="" echo Usage: CreateAndDeployDockerImage.bat ^<SSHPrivateKeyPath^> ^<SSHUser^> ^<SSHHost^> ^<RemoteRepositoryPath^> ^<DockerImageTag^> ^<EnvFile^> ^<DockerComposeFile^> 1>&2 & exit /b 2
+if "%~3"=="" echo Usage: CreateAndDeployDockerImage.bat ^<SSHPrivateKeyPath^> ^<SSHUser^> ^<SSHHost^> ^<RemoteRepositoryPath^> ^<DockerImageTag^> ^<EnvFile^> ^<DockerComposeFile^> 1>&2 & exit /b 2
+if "%~4"=="" echo Usage: CreateAndDeployDockerImage.bat ^<SSHPrivateKeyPath^> ^<SSHUser^> ^<SSHHost^> ^<RemoteRepositoryPath^> ^<DockerImageTag^> ^<EnvFile^> ^<DockerComposeFile^> 1>&2 & exit /b 2
+if "%~5"=="" echo Usage: CreateAndDeployDockerImage.bat ^<SSHPrivateKeyPath^> ^<SSHUser^> ^<SSHHost^> ^<RemoteRepositoryPath^> ^<DockerImageTag^> ^<EnvFile^> ^<DockerComposeFile^> 1>&2 & exit /b 2
+if "%~6"=="" echo Usage: CreateAndDeployDockerImage.bat ^<SSHPrivateKeyPath^> ^<SSHUser^> ^<SSHHost^> ^<RemoteRepositoryPath^> ^<DockerImageTag^> ^<EnvFile^> ^<DockerComposeFile^> 1>&2 & exit /b 2
+if "%~7"=="" echo Usage: CreateAndDeployDockerImage.bat ^<SSHPrivateKeyPath^> ^<SSHUser^> ^<SSHHost^> ^<RemoteRepositoryPath^> ^<DockerImageTag^> ^<EnvFile^> ^<DockerComposeFile^> 1>&2 & exit /b 2
 
 SET SSHPrivateKeyPath=%1
 SET SSHUser=%2
@@ -22,11 +31,16 @@ REM ==============================
 REM Script
 REM ==============================
 
-REM Connect to the remote server using SSH, navigate to the repository directory, and update the third line of the 'EnvFile' file with the new version tag.
-ssh -i %SSHPrivateKeyPath% %SSHUser%@%SSHHost% cd %RemoteRepositoryPath% ; sed -i '3s/.*/DOCKER_IMAGE_TAG=%DockerImageTag%/' %EnvFile% 
+echo [%DATE% %TIME%] Updating DOCKER_IMAGE_TAG=%DockerImageTag% in %EnvFile% (by key)
+REM Updates DOCKER_IMAGE_TAG by key with awk (idempotent); never by line position.
+ssh -o StrictHostKeyChecking=yes -o BatchMode=yes -i %SSHPrivateKeyPath% %SSHUser%@%SSHHost% "cd %RemoteRepositoryPath% && awk -v k=DOCKER_IMAGE_TAG -v v='%DockerImageTag%' 'BEGIN{FS=OFS=\"=\"} $1==k{$2=v;f=1}{print} END{if(!f)print k\"=\"v}' %EnvFile% > %EnvFile%.tmp && mv %EnvFile%.tmp %EnvFile% && grep '^DOCKER_IMAGE_TAG=' %EnvFile%"
 
-REM It connects to the remote server via SSH, navigates to the repository directory, then takes down all services defined in 'docker-compose.yaml', removing orphaned containers.
-ssh -i %SSHPrivateKeyPath% %SSHUser%@%SSHHost% "cd %RemoteRepositoryPath% && docker-compose -f %DockerComposeFile% --env-file=%EnvFile% down"
+echo [%DATE% %TIME%] Stopping services with %DockerComposeFile%
+REM Takes down all services defined in the compose file, removing orphaned containers.
+ssh -o StrictHostKeyChecking=yes -o BatchMode=yes -i %SSHPrivateKeyPath% %SSHUser%@%SSHHost% "cd %RemoteRepositoryPath% && docker compose -f %DockerComposeFile% --env-file=%EnvFile% down"
 
-REM It connects to the remote server via SSH, navigates to the repository directory, and starts the services defined in 'docker-compose.yaml' in the background. It prints the status of the last executed command (usually 0 for success or 1 for failure).
-ssh -i %SSHPrivateKeyPath% %SSHUser%@%SSHHost% "cd %RemoteRepositoryPath% && docker-compose -f %DockerComposeFile% --env-file=%EnvFile% up --build -d; echo \$?"
+echo [%DATE% %TIME%] Starting services with %DockerComposeFile%
+REM Starts the services in the background and prints the exit status.
+ssh -o StrictHostKeyChecking=yes -o BatchMode=yes -i %SSHPrivateKeyPath% %SSHUser%@%SSHHost% "cd %RemoteRepositoryPath% && docker compose -f %DockerComposeFile% --env-file=%EnvFile% up --build -d; echo $?"
+
+echo [%DATE% %TIME%] Deployed tag: %DockerImageTag%
