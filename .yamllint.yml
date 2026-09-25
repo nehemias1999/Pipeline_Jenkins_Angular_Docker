@@ -1,0 +1,9 @@
+# Reglas de lint YAML del repo (solo reglas yaml, sin hooks ni scripts).
+yaml-files:
+  - '*.yaml'
+  - '*.yml'
+extends: default
+rules:
+  line-length:
+    max: 120
+  document-start: disable

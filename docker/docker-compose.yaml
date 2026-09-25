@@ -1,17 +1,43 @@
-version: '3.8'
-
+# ==============================================================================
+# Description: Compose spec v2 del servicio web Angular (nginx no-root con
+#   healthcheck). Proposito: despliegue del contenedor con reinicio
+#   unless-stopped, limites de recursos y politica de build local.
+# Usage: docker compose --env-file docker/ANGULAR_APPLICATION.var -f docker/docker-compose.yaml up -d --build
+# Env Vars: ver docker/ANGULAR_APPLICATION.var (DOCKER_IMAGE_NAME/TAG, DOCKER_CONTAINER_NAME, REMOTE_SERVER_IP, NGINX_HOST/PORT)
+# Dependencies: Docker Compose v2
+# ==============================================================================
 services:
   web:
+    # Build local de la imagen (fuente de verdad: docker/Dockerfile).
     build:
       context: .
       dockerfile: Dockerfile
-    image: "${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG}"
-    container_name: "${DOCKER_CONTAINER_NAME}" 
+    # Interpolacion con fallback a los valores de ANGULAR_APPLICATION.var para que
+    # `docker compose config` valide (exit 0) aun sin entorno cargado; con
+    # --env-file o entorno Jenkins los valores reales siempre prevalecen.
+    image: "${DOCKER_IMAGE_NAME:-angular_application}:${DOCKER_IMAGE_TAG:-1.1}"
+    container_name: "${DOCKER_CONTAINER_NAME:-angular_application}"
+    # Configuracion externa (IPs, puertos, nombres) fuera del compose.
     env_file:
-      - dockerfile.env
+      - ANGULAR_APPLICATION.var
     ports:
-      - "${REMOTE_SERVER_IP}:${NGINX_PORT}:80"
+      - "${REMOTE_SERVER_IP:-10.200.200.200}:${NGINX_PORT:-8080}:80"
     environment:
-      - NGINX_HOST=${NGINX_HOST}
-      - NGINX_PORT=${NGINX_PORT}
-    restart: always 
+      - NGINX_HOST=${NGINX_HOST:-localhost}
+      - NGINX_PORT=${NGINX_PORT:-8080}
+    # No resucita el contenedor tras mantenimiento del host.
+    restart: unless-stopped
+    # Salud del nginx local (wget de busybox, igual que el HEALTHCHECK del Dockerfile).
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    # Tope de recursos del contenedor web.
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
+    # Reconstruye la imagen en cada up en vez de reutilizar tag remoto.
+    pull_policy: build
