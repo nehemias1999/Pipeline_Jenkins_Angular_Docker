@@ -1,0 +1,5 @@
+# Excluye del contexto de build artefactos VCS, dependencias y docs.
+.git
+node_modules
+deploy
+*.md

@@ -1,3 +1,5 @@
+# Variables del despliegue Angular/Docker (inyectadas via env_file, sin secretos).
+# Usage: referenciado por docker/docker-compose.yaml (env_file: ANGULAR_APPLICATION.var).
 
 DOCKER_IMAGE_NAME=angular_application
 DOCKER_IMAGE_TAG=1.1
