@@ -21,7 +21,7 @@ services:
     env_file:
       - ANGULAR_APPLICATION.var
     ports:
-      - "${REMOTE_SERVER_IP:-10.200.200.200}:${NGINX_PORT:-8080}:80"
+      - "${REMOTE_SERVER_IP:-192.0.2.10}:${NGINX_PORT:-8080}:80"
     environment:
       - NGINX_HOST=${NGINX_HOST:-localhost}
       - NGINX_PORT=${NGINX_PORT:-8080}

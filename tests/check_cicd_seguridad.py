@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # ==============================================================================
-# Description: Verifica REQ cicd-seguridad del Jenkinsfile (4 escenarios de la
-#   spec): sin secretos literales, parameters/options, SSH seguro con guardas,
+# Description: Verifica REQ cicd-seguridad (4 escenarios de la spec): escaneo
+#   multi-directorio de secretos (Jenkinsfile + bat/ + sh/ + docker/, excluye
+#   solo documentacion *.md), parameters/options, SSH seguro con guardas,
 #   stages Lint + Verify Deploy con healthcheck/rollback y post completo.
 # Author: sdd-implementer
 # Usage: python3 tests/check_cicd_seguridad.py [--root DIR]
@@ -10,10 +11,11 @@
 # Output / Exit codes: reporte por escenario en STDOUT; exit 0 todo verde,
 #   exit 1 algun escenario en rojo (fallos detallados en STDERR).
 # ==============================================================================
-"""Verificacion del requisito cicd-seguridad contra el Jenkinsfile real.
+"""Verificacion del requisito cicd-seguridad contra el repo real.
 
-Lee el Jenkinsfile del repo y comprueba los 4 escenarios del contrato
-de interfaz. Sin mocks: opera sobre el contenido real del archivo.
+Replica el grep literal de la spec sobre Jenkinsfile + bat/ + sh/ + docker/
+(excluye solo documentacion *.md) y comprueba los 4 escenarios del contrato
+de interfaz. Sin mocks: opera sobre el contenido real de los archivos.
 """
 
 from __future__ import annotations
@@ -30,13 +32,37 @@ SECRET_PATTERNS = [
     r"E:\\+Jenkins",
 ]
 
+# Alcance literal del escenario 1 de la spec (solo se excluye documentacion).
+SCAN_SCOPES = ("Jenkinsfile", "bat", "sh", "docker")
 
-def check_sin_secretos(text: str) -> list[str]:
-    """Revisa que no haya secretos literales y que use credentials()."""
+
+def iter_scan_files(root: Path) -> list[Path]:
+    """Archivos del alcance del escaneo, excluyendo solo documentacion."""
+    found: list[Path] = []
+    for scope in SCAN_SCOPES:
+        target = root / scope
+        if target.is_file():
+            found.append(target)
+        elif target.is_dir():
+            for path in sorted(target.rglob("*")):
+                if path.is_file() and path.suffix.lower() != ".md":
+                    found.append(path)
+    return found
+
+
+def check_sin_secretos(root: Path, text: str) -> list[str]:
+    """Revisa secretos en Jenkinsfile + bat/ + sh/ + docker/ y credentials()."""
     errors: list[str] = []
-    for pat in SECRET_PATTERNS:
-        if re.search(pat, text):
-            errors.append(f"secreto literal presente: {pat}")
+    for path in iter_scan_files(root):
+        try:
+            content = path.read_text(encoding="utf-8", errors="strict")
+        except (UnicodeDecodeError, OSError):
+            continue
+        for lineno, line in enumerate(content.splitlines(), start=1):
+            for pat in SECRET_PATTERNS:
+                if re.search(pat, line):
+                    rel = path.relative_to(root)
+                    errors.append(f"secreto literal {pat} en {rel}:{lineno}")
     for required in (
         "credentials('ssh-remote-user')",
         "credentials('ssh-remote-host')",
@@ -125,9 +151,10 @@ def main() -> int:
     if not jenkinsfile.is_file():
         print(f"ERROR: no existe {jenkinsfile}", file=sys.stderr)
         return 1
+    root = Path(args.root)
     text = jenkinsfile.read_text(encoding="utf-8")
     scenarios = (
-        ("1-sin-secretos", check_sin_secretos(text)),
+        ("1-sin-secretos", check_sin_secretos(root, text)),
         ("2-parameters-options", check_parameters_options(text)),
         ("3-ssh-guardas", check_ssh_seguro(text)),
         ("4-gates-post", check_gates(text)),
