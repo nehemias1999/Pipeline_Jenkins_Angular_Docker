@@ -2,33 +2,37 @@ pipeline {
 
     agent { label 'SERVER_1' }
 
+    // REQ cicd-seguridad: parametros declarativos (sin valores sensibles literales).
+    parameters {
+        booleanParam('FORCE_PIPELINE', false, 'Fuerza la ejecucion del pipeline aunque no haya cambios en la rama')
+        string(name: 'NGINX_PORT', defaultValue: '8080', description: 'Puerto NGINX expuesto para el healthcheck post-deploy')
+    }
+
+    // REQ cicd-seguridad: opciones de robustez del pipeline.
+    options {
+        timestamps()
+        timeout(time: 30, unit: 'MINUTES')
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+    }
+
     environment {
 
-        /* Pipeline Parameters */
-
-        ForcePipelineRun = "${params['Force pipeline execution']}" // Parameter to force the execution of the pipeline even if there are no changes
+        // REQ cicd-seguridad: secretos via Jenkins credentials (Secret Text), nunca literales.
+        SSH_REMOTE_USER = credentials('ssh-remote-user')
+        SSH_REMOTE_HOST = credentials('ssh-remote-host')
+        NGINX_HOST = credentials('nginx-host')
+        NGINX_PORT = "${params.NGINX_PORT}"
 
         /* Stage 'Checking Changes' */
 
         ApplicationPath = "C:\\Projects\\AngularApplication" // URL of the local git repository
         BranchName = 'master' // Branch to monitor for changes
 
-        /* Stages 'Set content Docker image' */
+        /* Stages 'Set content Docker image' (PipelinePath = workspace del build; la clave SSH llega por credentials, nunca por ruta literal) */
 
-        PipelinePath = "E:\\Jenkins_Root\\workspace\\ProjectName\\AngularApplication" // Path to the Jenkins pipeline workspace
-        SSHPrivateKeyPath = "C:\\Users\\sa_jenkins\\.ssh\\id_ed25519" // Path to the SSH private key
-        SSHUser = 'sa_jenkins' // SSH user for remote server
-        SSHHost = '10.200.2.29' // SSH host for remote server
         RemoteRepositoryPath = "/docker-compose/AngularApplication" // Path to the remote Docker repository
         DockerImageName = "angular_application" // Name of the Docker image
-
-        setContentDockerImageScript = '"bat\\SetContentDockerImage.bat" ' +
-                                      '%PipelinePath% ' +
-                                      '%ApplicationPath% ' +
-                                      '%SSHPrivateKeyPath% ' +
-                                      '%SSHUser% ' +
-                                      '%SSHHost% ' +
-                                      '%RemoteRepositoryPath%'
 
         /* Bloque versionado (REQ versionado-trazabilidad): tag SemVer + SHA corto para trazabilidad. */
         GIT_SHORT_SHA = "${env.GIT_COMMIT?.take(7) ?: 'dev'}"
@@ -39,23 +43,6 @@ pipeline {
         DockerImageTag = "1.${BUILD_ID}"
         DockerComposeFile = "docker-compose.yaml"
         EnvFile = "ANGULAR_APPLICATION.var"
-
-        createAndDeployDockerImageScript = '"bat\\CreateAndDeployDockerImage.bat" ' +
-                                           '%SSHPrivateKeyPath% ' +
-                                           '%SSHUser% ' +
-                                           '%SSHHost% ' +
-                                           '%RemoteRepositoryPath% ' +
-                                           '%DockerImageTag% ' +
-                                           '%EnvFile% ' + 
-                                           '%DockerComposeFile%'
-
-        /* Stage 'Post' */
-
-        deleteOldDockerLocalImagesScript = '"bat\\DeleteOldDockerLocalImages.bat" ' +
-                                           '%SSHPrivateKeyPath% ' +
-                                           '%SSHUser% ' +
-                                           '%SSHHost% ' +
-                                           '%RemoteRepositoryPath%'
 
     }
 
@@ -69,7 +56,7 @@ pipeline {
 
                 script {
 
-                    dir("${env.ApplicationPath}") { 
+                    dir("${env.ApplicationPath}") {
 
                         def changes = powershell(script: """
                             git fetch origin
@@ -86,7 +73,7 @@ pipeline {
                             echo "No hay cambios en la rama ${env.BranchName}. No se ejecutaran los siguientes stages."
                             env.hasChanges = "false"
 
-                            if (env.ForcePipelineRun != "true") {
+                            if (!params.FORCE_PIPELINE) {
 
                                 currentBuild.result = 'NOT_BUILT'
 
@@ -104,10 +91,31 @@ pipeline {
 
         }
 
+        stage('Lint') {
+
+            steps {
+
+                echo 'Start Lint'
+
+                // REQ cicd-seguridad: gate de calidad, falla el build si faltan artefactos base.
+                powershell label: 'Lint pipeline inputs', script: '''
+                    $ErrorActionPreference = 'Stop'
+                    if (-not (Test-Path 'docker/docker-compose.yaml')) { throw 'Lint: falta docker/docker-compose.yaml' }
+                    $var = Get-Content 'docker/ANGULAR_APPLICATION.var' -Raw
+                    if ($var -notmatch '(?m)^DOCKER_IMAGE_TAG=') { throw 'Lint: ANGULAR_APPLICATION.var sin clave DOCKER_IMAGE_TAG' }
+                    Write-Output 'Lint OK'
+                '''
+
+                echo 'End Lint'
+
+            }
+
+        }
+
         stage('Update Changes') {
 
             when {
-                expression { return env.hasChanges == "true" || env.ForcePipelineRun == "true" }
+                expression { return env.hasChanges == "true" || params.FORCE_PIPELINE }
             }
 
             steps {
@@ -131,7 +139,7 @@ pipeline {
         stage('Set content Docker image') {
 
             when {
-                expression { return env.hasChanges == "true" || env.ForcePipelineRun == "true" }
+                expression { return env.hasChanges == "true" || params.FORCE_PIPELINE }
             }
 
             steps {
@@ -140,8 +148,13 @@ pipeline {
 
                 script {
 
-                    bat label: 'Set content Docker image Script',
-                    script: "${env.setContentDockerImageScript}"
+                    // REQ cicd-seguridad: clave SSH via credentials store (nunca ruta literal).
+                    withCredentials([sshUserPrivateKey(credentialsId: 'ssh-deploy-key', keyFileVariable: 'SSH_KEY_FILE')]) {
+
+                        bat label: 'Set content Docker image Script',
+                        script: '"bat\\SetContentDockerImage.bat" %WORKSPACE% %ApplicationPath% %SSH_KEY_FILE% %SSH_REMOTE_USER% %SSH_REMOTE_HOST% %RemoteRepositoryPath%'
+
+                    }
 
                 }
 
@@ -183,7 +196,7 @@ pipeline {
         stage('Create and Deploy Docker image') {
 
             when {
-                expression { return env.hasChanges == "true" || env.ForcePipelineRun == "true" }
+                expression { return env.hasChanges == "true" || params.FORCE_PIPELINE }
             }
 
             steps {
@@ -192,12 +205,66 @@ pipeline {
 
                 script {
 
-                    bat label: 'Create and Deploy Docker image Script',
-                    script: "${env.createAndDeployDockerImageScript}"
+                    // REQ cicd-seguridad: clave SSH via credentials store (nunca ruta literal).
+                    withCredentials([sshUserPrivateKey(credentialsId: 'ssh-deploy-key', keyFileVariable: 'SSH_KEY_FILE')]) {
+
+                        // Guarda el tag previo para un eventual rollback del stage Verify Deploy.
+                        try {
+                            env.PREVIOUS_DOCKER_TAG = bat(script: 'ssh -o StrictHostKeyChecking=yes -o BatchMode=yes -i %SSH_KEY_FILE% %SSH_REMOTE_USER%@%SSH_REMOTE_HOST% "grep \'^DOCKER_IMAGE_TAG=\' %RemoteRepositoryPath%/ANGULAR_APPLICATION.var | cut -d= -f2"', returnStdout: true).trim()
+                        } catch (err) {
+                            echo "Sin tag previo remoto (deploy inicial): ${err.getMessage()}"
+                            env.PREVIOUS_DOCKER_TAG = ''
+                        }
+
+                        bat label: 'Create and Deploy Docker image Script',
+                        script: '"bat\\CreateAndDeployDockerImage.bat" %SSH_KEY_FILE% %SSH_REMOTE_USER% %SSH_REMOTE_HOST% %RemoteRepositoryPath% %DockerImageTag% %EnvFile% %DockerComposeFile%'
+
+                    }
 
                 }
 
                 echo 'End Create and Deploy Docker image'
+
+            }
+
+        }
+
+        stage('Verify Deploy') {
+
+            when {
+                expression { return env.hasChanges == "true" || params.FORCE_PIPELINE }
+            }
+
+            steps {
+
+                echo 'Start Verify Deploy'
+
+                script {
+
+                    // REQ cicd-seguridad: clave SSH via credentials store (nunca ruta literal).
+                    withCredentials([sshUserPrivateKey(credentialsId: 'ssh-deploy-key', keyFileVariable: 'SSH_KEY_FILE')]) {
+
+                        try {
+                            // REQ cicd-seguridad: healthcheck con reintentos contra NGINX_HOST:NGINX_PORT/health.
+                            retry(3) {
+                                bat label: 'Healthcheck post-deploy',
+                                script: 'ssh -o StrictHostKeyChecking=yes -o BatchMode=yes -i %SSH_KEY_FILE% %SSH_REMOTE_USER%@%SSH_REMOTE_HOST% "curl --fail --silent --show-error --max-time 10 http://%NGINX_HOST%:%NGINX_PORT%/health"'
+                            }
+                            echo 'Verify Deploy: healthcheck OK'
+                        } catch (err) {
+                            // Healthcheck fallo: rollback a la imagen previa y build en FAILURE.
+                            echo "Verify Deploy: healthcheck fallo tras reintentos, rollback a imagen previa (${env.PREVIOUS_DOCKER_TAG})"
+                            bat label: 'Rollback a imagen previa',
+                            script: 'ssh -o StrictHostKeyChecking=yes -o BatchMode=yes -i %SSH_KEY_FILE% %SSH_REMOTE_USER%@%SSH_REMOTE_HOST% "[ -n \'%PREVIOUS_DOCKER_TAG%\' ] && [ \'%PREVIOUS_DOCKER_TAG%\' != \'/\' ] && cd %RemoteRepositoryPath% && DOCKER_IMAGE_TAG=%PREVIOUS_DOCKER_TAG% docker compose up -d"'
+                            currentBuild.result = 'FAILURE'
+                            error "Verify Deploy: healthcheck fallo y se ejecuto rollback (${err.getMessage()})"
+                        }
+
+                    }
+
+                }
+
+                echo 'End Verify Deploy'
 
             }
 
@@ -232,18 +299,25 @@ pipeline {
 
                 if(env.hasChanges == "true") {
 
-                    bat label: 'Delete old Docker local images Script',
-                    script: "${env.deleteOldDockerLocalImagesScript}"
+                    // REQ cicd-seguridad: clave SSH via credentials store (nunca ruta literal).
+                    withCredentials([sshUserPrivateKey(credentialsId: 'ssh-deploy-key', keyFileVariable: 'SSH_KEY_FILE')]) {
+
+                        bat label: 'Delete old Docker local images Script',
+                        script: '"bat\\DeleteOldDockerLocalImages.bat" %SSH_KEY_FILE% %SSH_REMOTE_USER% %SSH_REMOTE_HOST% %RemoteRepositoryPath%'
+
+                    }
 
                 }
 
             }
 
+            echo '[notify] success: pipeline verde, artefactos archivados.'
             echo "Application deployed successfully."
-        
+
         }
 
         failure {
+            echo '[notify] failure: pipeline en rojo, revisar Verify Deploy y rollback.'
             echo "Failed to deploy the application."
         }
 
